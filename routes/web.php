@@ -9,3 +9,8 @@ Route::get('/', function () {
 Route::get('/all-users', function () {
     return \App\Models\User::all();
 });
+
+// Password reset page
+Route::get('/reset-password', function () {
+    return view('auth.reset-password');
+})->name('password.reset');

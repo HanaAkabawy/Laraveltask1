@@ -13,6 +13,7 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Throwable;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Mail;
 
 class AuthController extends Controller
 {
@@ -96,23 +97,44 @@ class AuthController extends Controller
         $backendUrl = rtrim((string) env('BACKEND_URL', config('app.url')), '/');
         $resetEndpoint = $backendUrl . '/api/auth/reset-password';
 
-        return response()->json([
-            'msg' => 'Password reset token generated.',
-            'token' => $token,
-            'resetEndpoint' => $resetEndpoint,
-        ]);
+        // Send email with reset link
+        try {
+            Mail::send('emails.forgot-password', [
+                'user' => $user,
+                'token' => $token,
+                'resetEndpoint' => $resetEndpoint
+            ], function ($message) use ($user) {
+                $message->to($user->email)
+                        ->subject('Password Reset Request');
+            });
+
+            return response()->json([
+                'msg' => 'Password reset email sent successfully. Please check your email.',
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'msg' => 'Failed to send password reset email. Please try again.',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     public function resetPassword(Request $request)
     {
+        // Get token from either request body or query parameter
+        $token = $request->input('token') ?? $request->query('token');
+        
         $validated = $request->validate([
-            'token' => 'required|string',
             'newPassword' => ['required', Password::min(8)],
         ]);
 
+        if (!$token) {
+            return response()->json(['msg' => 'Token is required'], 400);
+        }
+
         try {
             $secret = (string) env('JWT_SECRET');
-            $decoded = JWT::decode($validated['token'], new Key($secret, 'HS256'));
+            $decoded = JWT::decode($token, new Key($secret, 'HS256'));
             $email = $decoded->email ?? null;
         } catch (Throwable $e) {
             return response()->json(['msg' => 'Invalid or expired token'], 400);
