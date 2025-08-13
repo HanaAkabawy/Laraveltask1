@@ -18,14 +18,13 @@ use Illuminate\Support\Facades\Mail;
 class AuthController extends Controller
 {
     
-    public function showRegister()
-    {
-        return view('auth.register');
-    }
+   
 
     
     public function apiRegister(Request $request)
     {
+
+        
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
@@ -94,15 +93,17 @@ class AuthController extends Controller
             'exp' => time() + 900, // 15 minutes
         ], $secret, 'HS256');
 
-        $backendUrl = rtrim((string) env('BACKEND_URL', config('app.url')), '/');
-        $resetEndpoint = $backendUrl . '/api/auth/reset-password';
+        $frontUrl =  env('FRONTEND_URL');
+        $resetEndpoint = $frontUrl . '/resetpass';
+        $resetUrl = $resetEndpoint . '?token=' . urlencode($token);
+
 
         // Send email with reset link
         try {
             Mail::send('emails.forgot-password', [
                 'user' => $user,
                 'token' => $token,
-                'resetEndpoint' => $resetEndpoint
+                'resetUrl' => $resetUrl
             ], function ($message) use ($user) {
                 $message->to($user->email)
                         ->subject('Password Reset Request');
@@ -178,5 +179,75 @@ class AuthController extends Controller
         return response()->json(['msg' => 'Logged out successfully']);
     }
 
-    
+    public function getAllUsers()
+{
+    $users = User::select('id', 'name', 'email')->get();
+    return response()->json([
+        'success' => true,
+        'data' => $users
+    ]);
+}
+
+public function getUserById($id)
+{
+    $user = User::find($id);
+    if (!$user) {
+        return response()->json([
+            'msg' => 'User not found'
+        ], 404);
+    }
+    return response()->json([
+        'success' => true,
+        'data' => $user
+    ]);
+}
+
+public function updateUser(Request $request, $id)
+{
+    $user = User::find($id);
+    if (!$user) {
+        return response()->json([
+            'msg' => 'User not found'
+        ], 404);
+    }
+
+    $validated = $request->validate([
+        'name' => 'sometimes|string|max:255',
+        'email' => 'sometimes|email|unique:users,email,' . $id,
+        'password' => 'sometimes|string|min:8'
+    ]);
+
+    if (isset($validated['name'])) {
+        $user->name = $validated['name'];
+    }
+    if (isset($validated['email'])) {
+        $user->email = $validated['email'];
+    }
+    if (isset($validated['password'])) {
+        $user->password = Hash::make($validated['password']);
+    }
+
+    $user->save();
+
+    return response()->json([
+        'msg' => 'User updated successfully',
+        'data' => $user
+    ]);
+}
+
+public function deleteUser($id)
+{
+    $user = User::find($id);
+    if (!$user) {
+        return response()->json([
+            'msg' => 'User not found'
+        ], 404);
+    }
+
+    $user->delete();
+
+    return response()->json([
+        'msg' => 'User deleted successfully'
+    ]);
+}
 }

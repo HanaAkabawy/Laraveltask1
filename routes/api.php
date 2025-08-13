@@ -9,6 +9,8 @@ Route::post('/auth/logout', [AuthController::class, 'logout']);
 Route::post('/auth/resend-confirmation', [AuthController::class, 'resendConfirmationEmail']);
 Route::post('/auth/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/auth/reset-password', [AuthController::class, 'resetPassword']);
+Route::get('users', [AuthController::class, 'getAllUsers']);
+Route::get('users/{id}', [AuthController::class, 'getUserById']);
+Route::put('users/{id}', [AuthController::class, 'updateUser']);
+Route::delete('users/{id}', [AuthController::class, 'deleteUser']);
 
-
-Route::get('/auth/users', fn() => \App\Models\User::select('id','name','email')->orderByDesc('id')->paginate(20));
