@@ -14,17 +14,21 @@ use Firebase\JWT\Key;
 use Throwable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\Models\Permission;
 
 class AuthController extends Controller
 {
-    
-   
+    public function __construct()
+    {
+        // Apply middleware to protect admin routes
+        $this->middleware('auth.jwt')->except(['apiLogin', 'apiRegister', 'forgotPassword', 'resetPassword']);
+        $this->middleware('permission:manage users')->only(['getAllUsers', 'getUserById', 'updateUser', 'deleteUser']);
+        $this->middleware('role:admin')->only(['assignRole', 'removeRole', 'createRole', 'createPermission']);
+    }
 
-    
     public function apiRegister(Request $request)
     {
-
-        
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
@@ -37,6 +41,9 @@ class AuthController extends Controller
             'password' => Hash::make($validated['password']),
         ]);
 
+        // Assign default role to new users
+        $user->assignRole('user');
+
         // Email verification JWT (1 hour)
         $secret = (string) env('JWT_SECRET');
         $token = JWT::encode([
@@ -45,7 +52,7 @@ class AuthController extends Controller
         ], $secret, 'HS256');
 
         return response()->json([
-            'msg' => 'User registered.',
+            'msg' => 'User registered and assigned default role.',
             'verificationToken' => $token,
         ]);
     }
@@ -71,10 +78,21 @@ class AuthController extends Controller
             'exp' => time() + 86400,
         ], $secret, 'HS256');
 
-        return response()->json(['msg' => 'Logged in successfully', 'token' => $token]);
+        // Include user roles and permissions in login response
+        $userWithRoles = $user->load('roles', 'permissions');
+
+        return response()->json([
+            'msg' => 'Logged in successfully', 
+            'token' => $token,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'roles' => $userWithRoles->getRoleNames(),
+                'permissions' => $userWithRoles->getAllPermissions()->pluck('name')
+            ]
+        ]);
     }
-
-
 
     public function forgotPassword(Request $request)
     {
@@ -97,8 +115,6 @@ class AuthController extends Controller
         $resetEndpoint = $frontUrl . '/resetpass';
         $resetUrl = $resetEndpoint . '?token=' . urlencode($token);
 
-
-        // Send email with reset link
         try {
             Mail::send('emails.forgot-password', [
                 'user' => $user,
@@ -122,7 +138,6 @@ class AuthController extends Controller
 
     public function resetPassword(Request $request)
     {
-        // Get token from either request body or query parameter
         $token = $request->input('token') ?? $request->query('token');
         
         $validated = $request->validate([
@@ -167,7 +182,6 @@ class AuthController extends Controller
             $decodedPayload = JWT::decode($rawToken, new Key($secret, 'HS256'));
             $expiresAtUnix = isset($decodedPayload->exp) ? (int) $decodedPayload->exp : (time() + 3600);
         } catch (Throwable $e) {
-            // If token is invalid/expired, still create a short-lived blacklist entry
             $expiresAtUnix = time() + 300;
         }
 
@@ -179,75 +193,197 @@ class AuthController extends Controller
         return response()->json(['msg' => 'Logged out successfully']);
     }
 
+    // Protected user management methods (require permissions)
     public function getAllUsers()
-{
-    $users = User::select('id', 'name', 'email')->get();
-    return response()->json([
-        'success' => true,
-        'data' => $users
-    ]);
-}
+    {
+        $users = User::with('roles', 'permissions')->select('id', 'name', 'email')->get();
+        
+        $usersWithRoles = $users->map(function ($user) {
+            return [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'roles' => $user->getRoleNames(),
+                'permissions' => $user->getAllPermissions()->pluck('name')
+            ];
+        });
 
-public function getUserById($id)
-{
-    $user = User::find($id);
-    if (!$user) {
         return response()->json([
-            'msg' => 'User not found'
-        ], 404);
+            'success' => true,
+            'data' => $usersWithRoles
+        ]);
     }
-    return response()->json([
-        'success' => true,
-        'data' => $user
-    ]);
-}
 
-public function updateUser(Request $request, $id)
-{
-    $user = User::find($id);
-    if (!$user) {
+    public function getUserById($id)
+    {
+        $user = User::with('roles', 'permissions')->find($id);
+        if (!$user) {
+            return response()->json([
+                'msg' => 'User not found'
+            ], 404);
+        }
+
         return response()->json([
-            'msg' => 'User not found'
-        ], 404);
+            'success' => true,
+            'data' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'roles' => $user->getRoleNames(),
+                'permissions' => $user->getAllPermissions()->pluck('name')
+            ]
+        ]);
     }
 
-    $validated = $request->validate([
-        'name' => 'sometimes|string|max:255',
-        'email' => 'sometimes|email|unique:users,email,' . $id,
-        'password' => 'sometimes|string|min:8'
-    ]);
+    public function updateUser(Request $request, $id)
+    {
+        $user = User::find($id);
+        if (!$user) {
+            return response()->json([
+                'msg' => 'User not found'
+            ], 404);
+        }
 
-    if (isset($validated['name'])) {
-        $user->name = $validated['name'];
-    }
-    if (isset($validated['email'])) {
-        $user->email = $validated['email'];
-    }
-    if (isset($validated['password'])) {
-        $user->password = Hash::make($validated['password']);
-    }
+        $validated = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'email' => 'sometimes|email|unique:users,email,' . $id,
+            'password' => 'sometimes|string|min:8'
+        ]);
 
-    $user->save();
+        if (isset($validated['name'])) {
+            $user->name = $validated['name'];
+        }
+        if (isset($validated['email'])) {
+            $user->email = $validated['email'];
+        }
+        if (isset($validated['password'])) {
+            $user->password = Hash::make($validated['password']);
+        }
 
-    return response()->json([
-        'msg' => 'User updated successfully',
-        'data' => $user
-    ]);
-}
+        $user->save();
 
-public function deleteUser($id)
-{
-    $user = User::find($id);
-    if (!$user) {
         return response()->json([
-            'msg' => 'User not found'
-        ], 404);
+            'msg' => 'User updated successfully',
+            'data' => $user->load('roles', 'permissions')
+        ]);
     }
 
-    $user->delete();
+    public function deleteUser($id)
+    {
+        $user = User::find($id);
+        if (!$user) {
+            return response()->json([
+                'msg' => 'User not found'
+            ], 404);
+        }
 
-    return response()->json([
-        'msg' => 'User deleted successfully'
-    ]);
-}
+        $user->delete();
+
+        return response()->json([
+            'msg' => 'User deleted successfully'
+        ]);
+    }
+
+    // New role and permission management methods
+    public function assignRole(Request $request, $userId)
+    {
+        $validated = $request->validate([
+            'role' => 'required|string|exists:roles,name',
+        ]);
+
+        $user = User::find($userId);
+        if (!$user) {
+            return response()->json(['msg' => 'User not found'], 404);
+        }
+
+        $user->assignRole($validated['role']);
+
+        return response()->json([
+            'msg' => "Role '{$validated['role']}' assigned to user successfully",
+            'user_roles' => $user->getRoleNames()
+        ]);
+    }
+
+    public function removeRole(Request $request, $userId)
+    {
+        $validated = $request->validate([
+            'role' => 'required|string|exists:roles,name',
+        ]);
+
+        $user = User::find($userId);
+        if (!$user) {
+            return response()->json(['msg' => 'User not found'], 404);
+        }
+
+        $user->removeRole($validated['role']);
+
+        return response()->json([
+            'msg' => "Role '{$validated['role']}' removed from user successfully",
+            'user_roles' => $user->getRoleNames()
+        ]);
+    }
+
+    public function createRole(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|unique:roles,name',
+            'permissions' => 'array',
+            'permissions.*' => 'exists:permissions,name'
+        ]);
+
+        $role = Role::create(['name' => $validated['name']]);
+
+        if (isset($validated['permissions'])) {
+            $role->givePermissionTo($validated['permissions']);
+        }
+
+        return response()->json([
+            'msg' => 'Role created successfully',
+            'role' => $role->load('permissions')
+        ]);
+    }
+
+    public function createPermission(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|unique:permissions,name',
+        ]);
+
+        $permission = Permission::create(['name' => $validated['name']]);
+
+        return response()->json([
+            'msg' => 'Permission created successfully',
+            'permission' => $permission
+        ]);
+    }
+
+    public function getUserProfile()
+    {
+        $user = auth()->user()->load('roles', 'permissions');
+        
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'roles' => $user->getRoleNames(),
+                'permissions' => $user->getAllPermissions()->pluck('name')
+            ]
+        ]);
+    }
+
+    public function checkPermission(Request $request)
+    {
+        $validated = $request->validate([
+            'permission' => 'required|string'
+        ]);
+
+        $hasPermission = auth()->user()->can($validated['permission']);
+
+        return response()->json([
+            'permission' => $validated['permission'],
+            'has_permission' => $hasPermission
+        ]);
+    }
 }

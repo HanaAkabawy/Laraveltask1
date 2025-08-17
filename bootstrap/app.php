@@ -16,6 +16,14 @@ return Application::configure(basePath: dirname(__DIR__))
             'jwt.blacklist' => \App\Http\Middleware\CheckJwtBlacklist::class,
         ]);
     })
+    ->withMiddleware(function (Middleware $middleware) {
+        $middleware->alias([
+            'auth.jwt' => \App\Http\Middleware\JwtAuthMiddleware::class,
+            'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
+            'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
+            'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
+        ]);
+    })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (Throwable $e, Illuminate\Http\Request $request) {
             if ($request->expectsJson() || $request->is('api/*')) {
